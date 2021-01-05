@@ -1,34 +1,46 @@
 #!/bin/bash
 
-echo -e "$BASTION_TRUSTED" > /ssh/trusted
-echo -e "$BASTION_HOST_KEY" > /ssh/ssh_host_rsa_key
-echo -e "$BASTION_HOST_PUB_KEY" > /ssh/ssh_host_rsa_key.pub
-chmod 0600 /ssh/ssh_host_rsa_key
+chmod +x /bin/press_to_exit.sh
+useradd bastion
+usermod --shell /bin/press_to_exit.sh bastion
 
-tee /ssh/sshd_config << EOF
-Port 9722
-AddressFamily any
-ListenAddress 0.0.0.0
-ListenAddress ::
-HostKey /ssh/ssh_host_rsa_key
-HostCertificate /ssh_mount/ssh_host_rsa_key-cert.pub
-PermitRootLogin no
-PasswordAuthentication no
-PermitEmptyPasswords no
+mkdir -p $HOME/.ssh/
+rm -rf /etc/ssh/ssh_host_*
+
+echo -e "$BASTION_SSH_HOST_ED25519_KEY" > /etc/ssh/ssh_host_ed25519_key
+chmod 600 /etc/ssh/ssh_host*
+
+TRUSTED_PUBKEY=$(curl $TP_URL)
+
+sed -i '/^TrustedUserCAKeys/d' /etc/ssh/sshd_config
+sed -i '/^AuthorizedPrincipalsFile/d' /etc/ssh/sshd_config
+rm -rf /etc/ssh/sshd_config
+tee -a /etc/ssh/sshd_config << EOF
+
+AllowAgentForwarding no
+AllowTcpForwarding yes
+AllowUsers bastion
+AuthorizedPrincipalsFile /etc/ssh/principals
 ChallengeResponseAuthentication no
-DenyUsers root bin daemon adm lp sync shutdown halt mail news uucp operator man postmaster cron ftp sshd at squid xfs games postgres cyrus vpopmail ntp smmsp guest nobody
+ClientAliveCountMax 240
+ClientAliveInterval 120
+HostKey /etc/ssh/ssh_host_ed25519_key
+PasswordAuthentication no
+TrustedUserCAKeys /etc/ssh/trusted
+#UsePAM no
+X11Forwarding no
 
-Match User bastion
-	AllowAgentForwarding no
-	AllowTcpForwarding yes
-	PermitOpen *:22
-	GatewayPorts no
-	X11Forwarding no
-	PermitTunnel no
-	ForceCommand echo 'Pritunl Zero Bastion Host'
-	TrustedUserCAKeys /ssh/trusted
-	AuthorizedPrincipalsFile /ssh/principals
-Match all
+EOF
+tee /etc/ssh/principals << EOF
+emergency
+$PTZ_ROLE
 EOF
 
-/usr/sbin/sshd -D -f /ssh/sshd_config
+tee /etc/ssh/trusted << EOF
+$TRUSTED_PUBKEY
+EOF
+
+echo starting health check server
+python3 -m http.server > /dev/null 2>&1 &
+
+/usr/sbin/sshd -e -D -f /etc/ssh/sshd_config
